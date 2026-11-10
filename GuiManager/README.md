@@ -1,4 +1,4 @@
-# GuiWormsWMD — Game Overlay
+# GuiManager — Game Overlay
 
 Лёгкий overlay-слой поверх игры/приложения с поддержкой PNG-картинок,
 перемещения/ресайза/поворота мышью, per-process layout'ов и hotkeys,
@@ -61,7 +61,7 @@ Per-process хоткеи хранятся в `<имя-процесса>/overlay_
 
 ## Быстрый старт
 
-1. Скачай `GuiWormsWMD.exe` (или собери сам, см. ниже).
+1. Скачай `GuiManager.exe` (или собери сам, см. ниже).
 2. Положи рядом PNG-картинки, которые хочешь видеть поверх игры
    (`overlay_img1.png` … `overlay_img4.png`).
 3. Запусти `.exe`.
@@ -85,10 +85,10 @@ Per-process хоткеи хранятся в `<имя-процесса>/overlay_
 - Windows SDK 10 (ставится вместе с VS)
 
 **Шаги:**
-1. Открой `GuiWormsWMD.sln` в Visual Studio.
+1. Открой `GuiManager.sln` в Visual Studio.
 2. Выбери конфигурацию `Release | x64`.
 3. **Build → Rebuild Solution** (именно Rebuild, чтобы сбросить кэш).
-4. `.exe` появится в `x64/Release/GuiWormsWMD.exe`.
+4. `.exe` появится в `x64/Release/GuiManager.exe`.
 
 Без Visual Studio — из Developer Command Prompt:
 
