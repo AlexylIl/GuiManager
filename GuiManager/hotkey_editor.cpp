@@ -5,6 +5,9 @@
 #include "hotkey_editor.h"
 
 #include <string>
+#include <commctrl.h>
+
+#pragma comment(lib, "comctl32.lib")
 
 namespace {
 
@@ -21,8 +24,42 @@ namespace {
         IDC_STATUS = 1300,
     };
 
-
     static const int kFieldCount = kHotkeyFieldDescCount;
+
+    // Индексы кнопок в едином пространстве hoverBtn.
+    // 0..kFieldCount-1  — field-кнопки
+    // kFieldCount..     — нижний ряд
+    enum : int {
+        BTN_SAVE = kFieldCount,
+        BTN_CANCEL,
+        BTN_RESET,
+        BTN_EXIT,
+        BTN_COUNT
+    };
+
+    // ------------------------------------------------------------------
+    //  Палитра (Вариант A: Win10-светлая)
+    // ------------------------------------------------------------------
+    namespace Palette {
+        inline constexpr COLORREF kBtnBgNormal = RGB(250, 250, 250);
+        inline constexpr COLORREF kBtnBgHover = RGB(229, 241, 251);
+        inline constexpr COLORREF kBtnBgPressed = RGB(204, 228, 247);
+        inline constexpr COLORREF kBtnBorderNormal = RGB(173, 173, 173);
+        inline constexpr COLORREF kBtnBorderHover = RGB(0, 120, 215);
+        inline constexpr COLORREF kBtnBorderPressed = RGB(0, 90, 158);
+        inline constexpr COLORREF kBtnTextNormal = RGB(0, 0, 0);
+        inline constexpr COLORREF kBtnTextDisabled = RGB(160, 160, 160);
+
+        inline constexpr COLORREF kBtnBgCapturing = RGB(255, 244, 206);
+        inline constexpr COLORREF kBtnBorderCapturing = RGB(255, 185, 0);
+        inline constexpr COLORREF kBtnTextCapturing = RGB(122, 79, 0);
+
+        inline constexpr COLORREF kExitNormal = RGB(200, 45, 45);
+        inline constexpr COLORREF kExitHover = RGB(230, 57, 57);
+        inline constexpr COLORREF kExitPressed = RGB(150, 30, 30);
+        inline constexpr COLORREF kExitDisabled = RGB(150, 96, 96);
+        inline constexpr COLORREF kExitText = RGB(255, 255, 255);
+    }
 
     struct EditorState {
         HWND  hwnd = NULL;
@@ -36,15 +73,21 @@ namespace {
         HWND  hOwner = NULL;
         HWND  hBtn[kFieldCount] = {};
         HWND  hStatus = NULL;
-        HBRUSH hbrExitNormal = NULL;
-        HBRUSH hbrExitPressed = NULL;
-        HBRUSH hbrExitDisabled = NULL;
+
+        // hover-состояние (единое пространство BTN_*)
+        int   hoverBtn = -1;
+
+        // subclass-трекинг мыши на каждой кнопке
+        bool  btnTrackingMouse[BTN_COUNT] = {};
     };
 
     EditorState* StateOf(HWND h) {
         return reinterpret_cast<EditorState*>(GetWindowLongPtrW(h, GWLP_USERDATA));
     }
 
+    // ------------------------------------------------------------------
+    //  VK / валидация (без изменений от оригинала)
+    // ------------------------------------------------------------------
     std::wstring VkToName(UINT vk) {
         if (vk == 0) return L"— (not set)";
         switch (vk) {
@@ -114,6 +157,7 @@ namespace {
                     text = L"[ " + VkToName(vk) + L" ]";
             }
             SetWindowTextW(s->hBtn[i], text.c_str());
+            InvalidateRect(s->hBtn[i], NULL, FALSE);
         }
         if (s->hStatus) {
             SetWindowTextW(s->hStatus,
@@ -125,21 +169,142 @@ namespace {
 
     void ApplyNewVk(EditorState* s, UINT vk) {
         if (s->capturingIndex < 0) return;
-
-        // Все другие поля, где уже стоит этот vk, освобождаем (0 = not set).
         for (int i = 0; i < kFieldCount; ++i) {
             if (i == s->capturingIndex) continue;
             UINT& other = s->cfg.*(kHotkeyFieldDescs[i].member);
-            if (other == vk) {
-                other = 0;
-            }
+            if (other == vk) other = 0;
         }
-
         s->cfg.*(kHotkeyFieldDescs[s->capturingIndex].member) = vk;
         s->capturingIndex = -1;
         RefreshButtons(s);
     }
 
+    // ------------------------------------------------------------------
+    //  Рисование кнопок
+    // ------------------------------------------------------------------
+    void FillAndFrame(HDC dc, const RECT& rc, COLORREF bg,
+        COLORREF border, int borderWidth)
+    {
+        HBRUSH br = CreateSolidBrush(bg);
+        FillRect(dc, &rc, br);
+        DeleteObject(br);
+
+        HPEN pen = CreatePen(PS_SOLID, borderWidth, border);
+        HGDIOBJ oldPen = SelectObject(dc, pen);
+        HGDIOBJ oldBr = SelectObject(dc, GetStockObject(NULL_BRUSH));
+        Rectangle(dc, rc.left, rc.top, rc.right, rc.bottom);
+        SelectObject(dc, oldPen);
+        SelectObject(dc, oldBr);
+        DeleteObject(pen);
+    }
+
+    void DrawTextInButton(HDC dc, const RECT& rc, const wchar_t* text,
+        COLORREF color, bool offsetByPress)
+    {
+        RECT tr = rc;
+        if (offsetByPress) OffsetRect(&tr, 1, 1);
+
+        SetBkMode(dc, TRANSPARENT);
+        SetTextColor(dc, color);
+
+        HFONT font = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+        HGDIOBJ oldFont = SelectObject(dc, font);
+        DrawTextW(dc, text, -1, &tr,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        SelectObject(dc, oldFont);
+    }
+
+    // Рисуем обычную кнопку (field, Save, Cancel, Reset).
+    // index — в едином пространстве BTN_* (для field: 0..kFieldCount-1).
+    void DrawButton(const DRAWITEMSTRUCT* dis, EditorState* s, int index) {
+        HDC dc = dis->hDC;
+        RECT rc = dis->rcItem;
+
+        bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+        bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+        bool focused = (dis->itemState & ODS_FOCUS) != 0;
+        bool capturing = (index >= 0 && index < kFieldCount &&
+            s->capturingIndex == index);
+        bool hover = (s->hoverBtn == index);
+
+        COLORREF bg, border, textColor;
+        int borderWidth = 1;
+
+        if (disabled) {
+            bg = Palette::kBtnBgNormal;
+            border = Palette::kBtnBorderNormal;
+            textColor = Palette::kBtnTextDisabled;
+        }
+        else if (capturing) {
+            bg = Palette::kBtnBgCapturing;
+            border = Palette::kBtnBorderCapturing;
+            textColor = Palette::kBtnTextCapturing;
+            borderWidth = 2;
+        }
+        else if (pressed) {
+            bg = Palette::kBtnBgPressed;
+            border = Palette::kBtnBorderPressed;
+            textColor = Palette::kBtnTextNormal;
+            borderWidth = 2;
+        }
+        else if (hover) {
+            bg = Palette::kBtnBgHover;
+            border = Palette::kBtnBorderHover;
+            textColor = Palette::kBtnTextNormal;
+            borderWidth = 2;
+        }
+        else {
+            bg = Palette::kBtnBgNormal;
+            border = Palette::kBtnBorderNormal;
+            textColor = Palette::kBtnTextNormal;
+        }
+
+        FillAndFrame(dc, rc, bg, border, borderWidth);
+
+        wchar_t text[128] = { 0 };
+        GetWindowTextW(dis->hwndItem, text, 128);
+        DrawTextInButton(dc, rc, text, textColor, pressed && !disabled);
+
+        if (focused && !disabled) {
+            RECT fr = rc;
+            InflateRect(&fr, -3, -3);
+            DrawFocusRect(dc, &fr);
+        }
+    }
+
+    // Exit — отдельная палитра, но те же состояния.
+    void DrawExitButton(const DRAWITEMSTRUCT* dis, EditorState* s) {
+        HDC dc = dis->hDC;
+        RECT rc = dis->rcItem;
+
+        bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+        bool pressed = (dis->itemState & ODS_SELECTED) != 0;
+        bool focused = (dis->itemState & ODS_FOCUS) != 0;
+        bool hover = (s->hoverBtn == BTN_EXIT);
+
+        COLORREF bg;
+        if (disabled)     bg = Palette::kExitDisabled;
+        else if (pressed) bg = Palette::kExitPressed;
+        else if (hover)   bg = Palette::kExitHover;
+        else              bg = Palette::kExitNormal;
+
+        FillAndFrame(dc, rc, bg, RGB(0, 0, 0), 1);
+
+        wchar_t text[64] = { 0 };
+        GetWindowTextW(dis->hwndItem, text, 64);
+        DrawTextInButton(dc, rc, text, Palette::kExitText,
+            pressed && !disabled);
+
+        if (focused && !disabled) {
+            RECT fr = rc;
+            InflateRect(&fr, -3, -3);
+            DrawFocusRect(dc, &fr);
+        }
+    }
+
+    // ------------------------------------------------------------------
+    //  Layout (без изменений)
+    // ------------------------------------------------------------------
     void LayoutChildren(EditorState* s, int w, int h) {
         const int margin = 16;
         const int rowH = 32;
@@ -180,12 +345,10 @@ namespace {
     bool ValidateConfig(EditorState* s, std::wstring& errOut) {
         for (int i = 0; i < kFieldCount; ++i) {
             UINT a = s->cfg.*(kHotkeyFieldDescs[i].member);
-
             if (a == 0) {
                 errOut = L"Key not assigned for \""
                     + std::wstring(kHotkeyFieldDescs[i].label)
-                    + L"\".\n\n"
-                    L"Assign a key to every action before saving.";
+                    + L"\".\n\nAssign a key to every action before saving.";
                 return false;
             }
             if (IsForbiddenVk(a)) {
@@ -231,7 +394,6 @@ namespace {
             L"This will discard your current changes (they are not saved yet).",
             L"Reset hotkeys", MB_YESNO | MB_ICONQUESTION);
         if (res != IDYES) return;
-
         s->cfg = HotkeyConfig{};
         s->capturingIndex = -1;
         RefreshButtons(s);
@@ -243,42 +405,77 @@ namespace {
             L"Unsaved hotkey changes will be lost.",
             L"Exit overlay", MB_YESNO | MB_ICONWARNING);
         if (res != IDYES) return;
-
         s->saved = false;
         s->exitRequested = true;
         s->running = false;
         DestroyWindow(s->hwnd);
     }
 
-    void DrawExitButton(const DRAWITEMSTRUCT* dis, EditorState* s) {
-        HDC dc = dis->hDC;
-        RECT rc = dis->rcItem;
+    // ------------------------------------------------------------------
+    //  Subclass для hover-трекинга каждой кнопки
+    // ------------------------------------------------------------------
+    LRESULT CALLBACK ButtonSubclassProc(HWND h, UINT msg, WPARAM w, LPARAM l,
+        UINT_PTR /*id*/, DWORD_PTR ref)
+    {
+        EditorState* s = reinterpret_cast<EditorState*>(ref);
+        if (!s) return DefSubclassProc(h, msg, w, l);
 
-        bool pressed = (dis->itemState & ODS_SELECTED) != 0;
-        bool disabled = (dis->itemState & ODS_DISABLED) != 0;
+        // Определяем индекс кнопки в едином пространстве
+        int ctrlId = GetDlgCtrlID(h);
+        int index = -1;
+        if (ctrlId >= IDC_BTN_BASE && ctrlId < IDC_BTN_BASE + kFieldCount)
+            index = ctrlId - IDC_BTN_BASE;
+        else if (ctrlId == IDC_BTN_SAVE)   index = BTN_SAVE;
+        else if (ctrlId == IDC_BTN_CANCEL) index = BTN_CANCEL;
+        else if (ctrlId == IDC_BTN_RESET)  index = BTN_RESET;
+        else if (ctrlId == IDC_BTN_EXIT_APP) index = BTN_EXIT;
 
-        HBRUSH br = disabled ? s->hbrExitDisabled
-            : pressed ? s->hbrExitPressed
-            : s->hbrExitNormal;
-        if (!br) br = (HBRUSH)GetStockObject(BLACK_BRUSH);
+        if (index < 0) return DefSubclassProc(h, msg, w, l);
 
-        FillRect(dc, &rc, br);
-        FrameRect(dc, &rc, (HBRUSH)GetStockObject(BLACK_BRUSH));
+        switch (msg) {
+        case WM_MOUSEMOVE: {
+            if (!s->btnTrackingMouse[index]) {
+                TRACKMOUSEEVENT tme = { sizeof(tme) };
+                tme.dwFlags = TME_LEAVE;
+                tme.hwndTrack = h;
+                TrackMouseEvent(&tme);
+                s->btnTrackingMouse[index] = true;
+            }
+            if (s->hoverBtn != index) {
+                s->hoverBtn = index;
+                InvalidateRect(h, NULL, FALSE);
+            }
+            break;
+        }
+        case WM_MOUSELEAVE: {
+            s->btnTrackingMouse[index] = false;
+            if (s->hoverBtn == index) {
+                s->hoverBtn = -1;
+                InvalidateRect(h, NULL, FALSE);
+            }
+            break;
+        }
+        case WM_SETCURSOR: {
+            if (LOWORD(l) == HTCLIENT) {
+                SetCursor(LoadCursor(NULL, IDC_HAND));
+                return TRUE;
+            }
+            break;
+        }
+        case WM_LBUTTONUP: {
+            // Мышь ушла с кнопки, но клик отпущен здесь — гарантируем,
+            // что BS_OWNERDRAW перерисует normal-состояние.
+            // Реальную команду WM_COMMAND обработает DefSubclassProc.
+            break;
+        }
+        }
 
-        wchar_t text[64] = { 0 };
-        GetWindowTextW(dis->hwndItem, text, 64);
-
-        SetBkMode(dc, TRANSPARENT);
-        SetTextColor(dc, RGB(255, 255, 255));
-
-        HFONT font = (HFONT)SendMessageW(dis->hwndItem, WM_GETFONT, 0, 0);
-        HGDIOBJ oldFont = font ? SelectObject(dc, font) : nullptr;
-        DrawTextW(dc, text, -1, &rc, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
-        if (oldFont) SelectObject(dc, oldFont);
-
-        if (dis->itemState & ODS_FOCUS) DrawFocusRect(dc, &rc);
+        return DefSubclassProc(h, msg, w, l);
     }
 
+    // ------------------------------------------------------------------
+    //  WndProc
+    // ------------------------------------------------------------------
     LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM w, LPARAM l) {
         EditorState* s = StateOf(h);
 
@@ -292,35 +489,45 @@ namespace {
             HINSTANCE hi = (HINSTANCE)GetWindowLongPtrW(h, GWLP_HINSTANCE);
             s->hInst = hi;
 
-            s->hbrExitNormal = CreateSolidBrush(RGB(200, 45, 45));
-            s->hbrExitPressed = CreateSolidBrush(RGB(150, 30, 30));
-            s->hbrExitDisabled = CreateSolidBrush(RGB(150, 90, 90));
-
             for (int i = 0; i < kFieldCount; ++i) {
                 CreateWindowExW(0, L"STATIC", kHotkeyFieldDescs[i].label,
                     WS_CHILD | WS_VISIBLE | SS_LEFT,
                     0, 0, 10, 10, h, (HMENU)(INT_PTR)(IDC_STATIC_BASE + i), hi, NULL);
+
                 s->hBtn[i] = CreateWindowExW(0, L"BUTTON", L"",
-                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                     0, 0, 10, 10, h, (HMENU)(INT_PTR)(IDC_BTN_BASE + i), hi, NULL);
+                SetWindowSubclass(s->hBtn[i], ButtonSubclassProc,
+                    (UINT_PTR)(IDC_BTN_BASE + i), (DWORD_PTR)s);
             }
+
             s->hStatus = CreateWindowExW(0, L"STATIC", L"",
                 WS_CHILD | WS_VISIBLE | SS_LEFT,
                 0, 0, 10, 10, h, (HMENU)(INT_PTR)IDC_STATUS, hi, NULL);
 
-            CreateWindowExW(0, L"BUTTON", L"Exit",
+            HWND hExit = CreateWindowExW(0, L"BUTTON", L"Exit",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0, 0, 10, 10, h, (HMENU)(INT_PTR)IDC_BTN_EXIT_APP, hi, NULL);
+            SetWindowSubclass(hExit, ButtonSubclassProc,
+                (UINT_PTR)IDC_BTN_EXIT_APP, (DWORD_PTR)s);
 
-            CreateWindowExW(0, L"BUTTON", L"Reset",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            HWND hReset = CreateWindowExW(0, L"BUTTON", L"Reset",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0, 0, 10, 10, h, (HMENU)(INT_PTR)IDC_BTN_RESET, hi, NULL);
-            CreateWindowExW(0, L"BUTTON", L"Save",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+            SetWindowSubclass(hReset, ButtonSubclassProc,
+                (UINT_PTR)IDC_BTN_RESET, (DWORD_PTR)s);
+
+            HWND hSave = CreateWindowExW(0, L"BUTTON", L"Save",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW | BS_DEFPUSHBUTTON,
                 0, 0, 10, 10, h, (HMENU)(INT_PTR)IDC_BTN_SAVE, hi, NULL);
-            CreateWindowExW(0, L"BUTTON", L"Cancel",
-                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+            SetWindowSubclass(hSave, ButtonSubclassProc,
+                (UINT_PTR)IDC_BTN_SAVE, (DWORD_PTR)s);
+
+            HWND hCancel = CreateWindowExW(0, L"BUTTON", L"Cancel",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
                 0, 0, 10, 10, h, (HMENU)(INT_PTR)IDC_BTN_CANCEL, hi, NULL);
+            SetWindowSubclass(hCancel, ButtonSubclassProc,
+                (UINT_PTR)IDC_BTN_CANCEL, (DWORD_PTR)s);
 
             RefreshButtons(s);
             return 0;
@@ -332,10 +539,19 @@ namespace {
 
         case WM_DRAWITEM: {
             auto* dis = reinterpret_cast<DRAWITEMSTRUCT*>(l);
-            if (dis && dis->CtlID == IDC_BTN_EXIT_APP) {
+            if (!dis || !s) break;
+
+            if (dis->CtlID == IDC_BTN_EXIT_APP) {
                 DrawExitButton(dis, s);
                 return TRUE;
             }
+            if (dis->CtlID >= IDC_BTN_BASE && dis->CtlID < IDC_BTN_BASE + kFieldCount) {
+                DrawButton(dis, s, dis->CtlID - IDC_BTN_BASE);
+                return TRUE;
+            }
+            if (dis->CtlID == IDC_BTN_SAVE) { DrawButton(dis, s, BTN_SAVE);   return TRUE; }
+            if (dis->CtlID == IDC_BTN_CANCEL) { DrawButton(dis, s, BTN_CANCEL); return TRUE; }
+            if (dis->CtlID == IDC_BTN_RESET) { DrawButton(dis, s, BTN_RESET);  return TRUE; }
             break;
         }
 
@@ -382,8 +598,6 @@ namespace {
 
         case WM_SYSKEYDOWN: {
             if (!s) break;
-            // F10 и Alt-комбинации приходят как WM_SYSKEYDOWN.
-            // В режиме захвата применяем клавишу так же, как WM_KEYDOWN.
             if (s->capturingIndex >= 0) {
                 UINT vk = (UINT)w;
                 if (vk == VK_ESCAPE) {
@@ -409,12 +623,7 @@ namespace {
             return 0;
 
         case WM_DESTROY:
-            if (s) {
-                s->running = false;
-                if (s->hbrExitNormal) { DeleteObject(s->hbrExitNormal); s->hbrExitNormal = NULL; }
-                if (s->hbrExitPressed) { DeleteObject(s->hbrExitPressed); s->hbrExitPressed = NULL; }
-                if (s->hbrExitDisabled) { DeleteObject(s->hbrExitDisabled); s->hbrExitDisabled = NULL; }
-            }
+            if (s) s->running = false;
             return 0;
         }
         return DefWindowProcW(h, msg, w, l);
@@ -422,6 +631,9 @@ namespace {
 
 } // namespace
 
+// ============================================================================
+//  ShowModal
+// ============================================================================
 bool HotkeyEditorWindow::ShowModal(HWND owner, HINSTANCE hInst,
     HotkeyConfig& cfg,
     bool* outExitRequested)
@@ -435,11 +647,12 @@ bool HotkeyEditorWindow::ShowModal(HWND owner, HINSTANCE hInst,
         wc.hCursor = LoadCursor(NULL, IDC_ARROW);
         wc.hbrBackground = (HBRUSH)(COLOR_BTNFACE + 1);
         wc.lpszClassName = kClassName;
+        wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_ICON1));
+        wc.hIconSm = (HICON)LoadImageW(hInst, MAKEINTRESOURCEW(IDI_ICON1),
+            IMAGE_ICON, 16, 16, LR_DEFAULTCOLOR);
         if (!RegisterClassExW(&wc)) {
             DWORD err = GetLastError();
-            if (err != ERROR_CLASS_ALREADY_EXISTS) {
-                return false;
-            }
+            if (err != ERROR_CLASS_ALREADY_EXISTS) return false;
         }
         classRegistered = true;
     }
@@ -462,7 +675,7 @@ bool HotkeyEditorWindow::ShowModal(HWND owner, HINSTANCE hInst,
     int y = ownerRect.top + ((ownerRect.bottom - ownerRect.top) - H) / 2;
 
     HWND hWnd = CreateWindowExW(
-        WS_EX_DLGMODALFRAME,
+        WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT,   // <-- CONTROLPARENT для IsDialogMessage
         kClassName, L"Configuring hotkeys",
         WS_CAPTION | WS_SYSMENU | WS_POPUP,
         x, y, W, H,
@@ -482,16 +695,13 @@ bool HotkeyEditorWindow::ShowModal(HWND owner, HINSTANCE hInst,
             PostQuitMessage((int)msg.wParam);
             break;
         }
-        TranslateMessage(&msg);
-        DispatchMessageW(&msg);
+        if (!IsDialogMessageW(hWnd, &msg)) {   // <-- Tab/Space/Enter
+            TranslateMessage(&msg);
+            DispatchMessageW(&msg);
+        }
     }
 
-    if (owner) {
-        EnableWindow(owner, TRUE);
-        // Do NOT call SetForegroundWindow(owner): the overlay uses
-        // WS_EX_NOACTIVATE, activation is meaningless and breaks the
-        // timer's foreground logic. RunWithDialog restores focus.
-    }
+    if (owner) EnableWindow(owner, TRUE);
 
     if (outExitRequested) *outExitRequested = s.exitRequested;
     if (s.saved) cfg = s.cfg;
