@@ -173,6 +173,61 @@ std::wstring TargetWatcher::ResolveCurrentTargetProcess() {
     return std::wstring();
 }
 
+struct BringToFgCtx {
+    TargetWatcher* watcher;
+    HWND hwnd;
+};
+
+static BOOL CALLBACK EnumBringToFgProc(HWND h, LPARAM lp) {
+    auto* c = reinterpret_cast<BringToFgCtx*>(lp);
+    if (!IsWindowVisible(h) || GetWindow(h, GW_OWNER) != NULL) return TRUE;
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    wchar_t name[MAX_PATH] = { 0 };
+    if (!TargetWatcher::GetProcessNameById(pid, name, MAX_PATH)) return TRUE;
+    if (TargetWatcher::IsIgnoredProcess(name)) return TRUE;
+
+    if (c->watcher->IsProcessInTargetList(name)) {
+        c->hwnd = h;
+        return FALSE;
+    }
+    return TRUE;
+}
+
+bool TargetWatcher::BringTargetToForeground() {
+    if (m_targets.showEverywhere) {
+        HWND hFg = GetForegroundWindow();
+        if (hFg) {
+            DWORD pid = 0;
+            GetWindowThreadProcessId(hFg, &pid);
+            wchar_t name[MAX_PATH] = { 0 };
+            if (GetProcessNameById(pid, name, MAX_PATH) && !IsIgnoredProcess(name)) {
+                return true; 
+            }
+        }
+        BringToFgCtx ctx = { this, NULL };
+        EnumWindows(EnumBringToFgProc, reinterpret_cast<LPARAM>(&ctx));
+        if (ctx.hwnd) {
+            SetForegroundWindow(ctx.hwnd);
+            return true;
+        }
+        return false;
+    }
+
+    if (m_targets.processes.empty()) return false;
+
+    BringToFgCtx ctx = { this, NULL };
+    EnumWindows(EnumBringToFgProc, reinterpret_cast<LPARAM>(&ctx));
+
+    if (ctx.hwnd) {
+        if (IsIconic(ctx.hwnd)) ShowWindow(ctx.hwnd, SW_RESTORE);
+        SetForegroundWindow(ctx.hwnd);
+        return true;
+    }
+    return false;
+}
+
 struct EnumCtxEx {
     TargetWatcher* watcher;
     HWND hwnd;
@@ -191,6 +246,81 @@ static BOOL CALLBACK EnumTargetProcEx(HWND h, LPARAM lp) {
         return FALSE;
     }
     return TRUE;
+}
+
+// ---------------------------------------------------------------------------
+//  GetRunningTargets — список уникальных имён запущенных целевых процессов
+// ---------------------------------------------------------------------------
+std::vector<std::wstring> TargetWatcher::GetRunningTargets() const {
+    std::vector<std::wstring> result;
+    if (m_targets.showEverywhere) return result;
+    if (m_targets.processes.empty()) return result;
+
+    HANDLE hSnap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnap == INVALID_HANDLE_VALUE) return result;
+
+    PROCESSENTRY32W pe = { 0 };
+    pe.dwSize = sizeof(pe);
+    if (Process32FirstW(hSnap, &pe)) {
+        do {
+            wchar_t low[MAX_PATH] = { 0 };
+            wcsncpy_s(low, pe.szExeFile, _TRUNCATE);
+            CharLowerBuffW(low, (DWORD)wcslen(low));
+            if (IsIgnoredProcess(low)) continue;
+            if (IsProcessInTargetList(low)) {
+                bool exists = false;
+                for (const auto& r : result) {
+                    if (wcscmp(r.c_str(), low) == 0) { exists = true; break; }
+                }
+                if (!exists) result.push_back(low);
+            }
+        } while (Process32NextW(hSnap, &pe));
+    }
+    CloseHandle(hSnap);
+    return result;
+}
+
+// ---------------------------------------------------------------------------
+//  FindMainWindowForProcess — поиск главного окна процесса (даже свёрнутого)
+// ---------------------------------------------------------------------------
+struct FindMainWindowCtx {
+    DWORD pid;
+    HWND  bestHwnd;
+    int   bestScore;
+};
+
+static BOOL CALLBACK EnumProcessWindowsProc(HWND h, LPARAM lp) {
+    auto* c = reinterpret_cast<FindMainWindowCtx*>(lp);
+
+    DWORD pid = 0;
+    GetWindowThreadProcessId(h, &pid);
+    if (pid != c->pid) return TRUE;
+
+    int score = 0;
+    if (IsWindowVisible(h)) score += 10;
+    if (GetWindowTextLengthW(h) > 0) score += 20;
+    if (GetWindow(h, GW_OWNER) == NULL) score += 30;
+
+    LONG style = GetWindowLongW(h, GWL_STYLE);
+    if ((style & WS_OVERLAPPEDWINDOW) == WS_OVERLAPPEDWINDOW) score += 25;
+    if (style & WS_POPUP) score += 5;
+
+    RECT rc;
+    GetWindowRect(h, &rc);
+    if ((rc.right - rc.left) > 100 && (rc.bottom - rc.top) > 100) score += 15;
+    if (GetWindowTextLengthW(h) == 0 && (style & WS_POPUP)) score -= 10;
+
+    if (score > c->bestScore) {
+        c->bestScore = score;
+        c->bestHwnd = h;
+    }
+    return TRUE;
+}
+
+HWND TargetWatcher::FindMainWindowForProcess(DWORD pid) const {
+    FindMainWindowCtx ctx = { pid, NULL, -1 };
+    EnumWindows(EnumProcessWindowsProc, reinterpret_cast<LPARAM>(&ctx));
+    return ctx.bestHwnd;
 }
 
 RECT TargetWatcher::ComputeTargetMonitorRect() {

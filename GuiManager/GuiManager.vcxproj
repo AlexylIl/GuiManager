@@ -142,19 +142,29 @@
     <ClCompile Include="config_store.cpp" />
     <ClCompile Include="geometry.cpp" />
     <ClCompile Include="hotkey_editor.cpp" />
+    <ClCompile Include="hotkey_manager.cpp" />
     <ClCompile Include="image_manager.cpp" />
+    <ClCompile Include="layout_store.cpp" />
     <ClCompile Include="main.cpp" />
+    <ClCompile Include="overlay_renderer.cpp" />
     <ClCompile Include="overlay_window.cpp" />
+    <ClCompile Include="process_picker.cpp" />
     <ClCompile Include="target_watcher.cpp" />
+    <ClCompile Include="ui_kit.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="config_store.h" />
     <ClInclude Include="hotkey_editor.h" />
+    <ClInclude Include="hotkey_manager.h" />
     <ClInclude Include="image_manager.h" />
+    <ClInclude Include="layout_store.h" />
     <ClInclude Include="overlay.h" />
+    <ClInclude Include="overlay_renderer.h" />
     <ClInclude Include="overlay_window.h" />
+    <ClInclude Include="process_picker.h" />
     <ClInclude Include="resource.h" />
     <ClInclude Include="target_watcher.h" />
+    <ClInclude Include="ui_kit.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="README.md" />

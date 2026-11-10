@@ -1,11 +1,7 @@
-// ============================================================================
-//  image_manager.cpp
-// ============================================================================
 #include "overlay.h"
 #include "config_store.h"
 #include "image_manager.h"
 
-// ---------- общие утилиты ----------
 bool BuildExeRelativePath(const wchar_t* fileName, wchar_t* outPath, DWORD cch) {
     if (!outPath || cch == 0 || !fileName) return false;
     outPath[0] = 0;
@@ -41,7 +37,6 @@ int EffectiveMaxSize() {
     return std::min(MAX_SIZE, maxDim);
 }
 
-// ---------- WIC ----------
 HRESULT DecodeToBGRA(IWICBitmapDecoder* decoder,
     IWICBitmapSource** outBitmap, int& outW, int& outH)
 {
@@ -120,7 +115,6 @@ HRESULT LoadPNGFromFileWIC(const wchar_t* filePath,
     return DecodeToBGRA(decoder.Get(), outBitmap, outW, outH);
 }
 
-// ---------- ImageManager ----------
 HRESULT ImageManager::LoadSlot(HINSTANCE hInst, int slotIndex,
     const std::wstring& targetProcess,
     OverlayImage& img, bool& usedCustom,
@@ -133,7 +127,6 @@ HRESULT ImageManager::LoadSlot(HINSTANCE hInst, int slotIndex,
     img.pImage.Reset();
     img.nativeW = img.nativeH = 0;
 
-    // 1. per-process картинка
     if (!targetProcess.empty()) {
         wchar_t procPath[MAX_PATH] = { 0 };
         ConfigStore cfg;
@@ -157,7 +150,6 @@ HRESULT ImageManager::LoadSlot(HINSTANCE hInst, int slotIndex,
         }
     }
 
-    // 2. общая картинка рядом с exe
     wchar_t customPath[MAX_PATH] = { 0 };
     bool pathOk = BuildExeRelativePath(slot.defaultFileName, customPath, MAX_PATH);
 
@@ -187,7 +179,6 @@ HRESULT ImageManager::LoadSlot(HINSTANCE hInst, int slotIndex,
         img.nativeW = img.nativeH = 0;
     }
 
-    // 3. ресурс
     if (slot.resId == 0) return E_NOTIMPL;
 
     HRESULT hr = LoadPNGFromResourceWIC(hInst, slot.resId,
@@ -215,6 +206,10 @@ void ImageManager::ReloadAll(HINSTANCE hInst, const std::wstring& targetProcess,
         bool  vis = img.visible;
         bool  usedCustom = false;
 
+        ComPtr<IWICBitmapSource> prevBmp = img.pImage;
+        int prevNativeW = img.nativeW;
+        int prevNativeH = img.nativeH;
+
         HRESULT hr = LoadSlot(hInst, i, targetProcess, img, usedCustom, diagOut);
         bool hasNow = (img.pImage != nullptr);
 
@@ -223,6 +218,9 @@ void ImageManager::ReloadAll(HINSTANCE hInst, const std::wstring& targetProcess,
             SetImageWidthKeepAspect(img, targetW);
         }
         else {
+            img.pImage = std::move(prevBmp);
+            img.nativeW = prevNativeW;
+            img.nativeH = prevNativeH;
             img.width = prevW;
             img.height = prevH;
         }

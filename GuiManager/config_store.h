@@ -1,8 +1,6 @@
 #pragma once
 #include "overlay.h"
 
-#include <span>
-
 struct HotkeyConfig {
     UINT toggle_visible = VK_F9;
     UINT toggle_edit = VK_F10;
@@ -41,8 +39,7 @@ public:
     void EnsureConfigExists() const;
 
     TargetPolicy LoadGlobalConfig() const;
-    bool         SaveGlobalConfig(const TargetPolicy& targets,
-        std::span<const HotkeyDef> hotkeys) const;
+    bool         SaveGlobalConfig(const TargetPolicy& targets) const;
 
     static HotkeyConfig DefaultHotkeys();
     HotkeyConfig LoadHotkeysForProcess(const std::wstring& procName) const;
@@ -55,12 +52,6 @@ public:
     bool SaveLayoutForProcess(const std::wstring& procName,
         const std::vector<OverlayImage>& images,
         bool onlyIfEmpty) const;
-
-    bool SaveAll(const TargetPolicy& targets,
-        std::span<const HotkeyDef> hotkeys,
-        const std::wstring& layoutOwner,
-        bool layoutDirty,
-        const std::vector<OverlayImage>& images) const;
 
     static void ResetToDefaults(std::vector<OverlayImage>& images);
 
@@ -81,5 +72,5 @@ private:
     static std::wstring FormatHotkey(UINT vk);
     static UINT ParseVkHex(const wchar_t* s, UINT def);
 
-    HotkeyConfig LoadGlobalHotkeys() const; 
+    HotkeyConfig LoadGlobalHotkeys() const;
 };

@@ -1,10 +1,7 @@
-// ============================================================================
-//  config_store.cpp
-// ============================================================================
 #include "overlay.h"
 #include "config_store.h"
 
-#include <iterator>   // std::size
+#include <iterator>
 
 const ImageSlotDef kSlots[MAX_IMAGES] = {
     { IMAGE1, L"overlay_img1.png", L"img1" },
@@ -25,7 +22,6 @@ const wchar_t* TARGET_ANY_MARKER = L"*";
 const wchar_t* TARGET_NONE_MARKER = L"-";
 
 
-// ---------- путь / шаблон ----------
 bool ConfigStore::GetConfigPath(wchar_t* outPath, DWORD cch) const {
     wchar_t exePath[MAX_PATH] = { 0 };
     GetModuleFileNameW(NULL, exePath, MAX_PATH);
@@ -49,7 +45,7 @@ bool ConfigStore::GetProcessDir(const std::wstring& procName,
     else exePath[0] = 0;
 
     size_t need = wcslen(exePath) + procName.size() + 2;
-    if (need > (size_t)cch) return false;
+    if (need >= (size_t)cch) return false;
 
     wcscpy_s(outDir, cch, exePath);
     wcscat_s(outDir, cch, procName.c_str());
@@ -83,7 +79,6 @@ bool ConfigStore::GetProcessImagePath(const std::wstring& procName,
     return swprintf_s(outPath, cch, L"%s%s", dir, fileName) >= 0;
 }
 
-// ---------- шаблон ----------
 static const wchar_t* CONFIG_TEMPLATE =
 L"; ============================================================\n"
 L";  Game Overlay - configuration\n"
@@ -120,7 +115,7 @@ L";\n"
 L";   Numpad *      reload images from disk\n"
 L";                 (after replacing overlay_imgN.png)\n"
 L";\n"
-L"    Numpad /      Open the hotkey editor.\n"
+L";    Numpad /      Open the hotkey editor.\n"
 L";                 To close the overlay: open the editor and press\n"
 L";                 the red 'Exit' button (with confirmation).\n"
 L";                 close the overlay (with confirmation)\n"
@@ -247,7 +242,6 @@ void ConfigStore::EnsureConfigExists() const {
     CloseHandle(hFile);
 }
 
-// ---------- hotkeys ----------
 std::wstring ConfigStore::FormatHotkey(UINT vk) {
     wchar_t buf[16];
     swprintf_s(buf, L"0x%X", vk);
@@ -259,7 +253,7 @@ UINT ConfigStore::ParseVkHex(const wchar_t* s, UINT def) {
     wchar_t* end = nullptr;
     unsigned long v = wcstoul(s, &end, 16);
     if (end == s) return def;
-    if (v == 0 || v > 0xFF) return def;  
+    if (v == 0 || v > 0xFF) return def;
     return (UINT)v;
 }
 
@@ -290,7 +284,7 @@ HotkeyConfig ConfigStore::LoadHotkeysForProcess(const std::wstring& procName) co
     if (procName.empty()) return hk;
 
     wchar_t procPath[MAX_PATH] = { 0 };
-    if (!GetProcessConfigPath(procName, procPath, MAX_PATH, /*create*/ false))
+    if (!GetProcessConfigPath(procName, procPath, MAX_PATH, false))
         return hk;
     if (GetFileAttributesW(procPath) == INVALID_FILE_ATTRIBUTES)
         return hk;
@@ -313,7 +307,7 @@ bool ConfigStore::SaveHotkeysForProcess(const std::wstring& procName,
     if (procName.empty()) return false;
 
     wchar_t fullPath[MAX_PATH] = { 0 };
-    if (!GetProcessConfigPath(procName, fullPath, MAX_PATH, /*create*/ true)) {
+    if (!GetProcessConfigPath(procName, fullPath, MAX_PATH, true)) {
         OutputDebugStringW(L"[ConfigStore] SaveHotkeysForProcess: GetProcessConfigPath failed\n");
         return false;
     }
@@ -342,7 +336,6 @@ bool ConfigStore::SaveHotkeysForProcess(const std::wstring& procName,
     return allOk;
 }
 
-// ---------- strings ----------
 std::wstring ConfigStore::TrimAndLower(std::wstring s) {
     size_t b = s.find_first_not_of(L" \t\r\n");
     size_t e = s.find_last_not_of(L" \t\r\n");
@@ -372,7 +365,6 @@ std::vector<std::wstring> ConfigStore::ParseProcessList(const std::wstring& s) {
     return out;
 }
 
-// ---------- layout parsing ----------
 int ConfigStore::ParseLayoutLine(const wchar_t* s,
     int& x, int& y, int& w, int& h, float& rot, int& vis)
 {
@@ -391,7 +383,7 @@ int ConfigStore::ParseLayoutLine(const wchar_t* s,
         wchar_t* end = nullptr;
         long v = wcstol(p, &end, 10);
         if (end == p) return false;
-        if (!atFieldBoundary(end)) return false; 
+        if (!atFieldBoundary(end)) return false;
         out = (int)v; p = end; return true;
         };
     auto parseFloat = [&](float& out) -> bool {
@@ -415,7 +407,6 @@ int ConfigStore::ParseLayoutLine(const wchar_t* s,
     return n;
 }
 
-// ---------- global ----------
 TargetPolicy ConfigStore::LoadGlobalConfig() const {
     TargetPolicy targets;
 
@@ -449,9 +440,7 @@ TargetPolicy ConfigStore::LoadGlobalConfig() const {
     return targets;
 }
 
-bool ConfigStore::SaveGlobalConfig(const TargetPolicy& targets,
-    std::span<const HotkeyDef> hotkeys) const
-{
+bool ConfigStore::SaveGlobalConfig(const TargetPolicy& targets) const {
     wchar_t fullPath[MAX_PATH];
     if (!GetConfigPath(fullPath, MAX_PATH)) {
         OutputDebugStringW(L"[ConfigStore] SaveGlobalConfig: GetConfigPath failed\n");
@@ -472,19 +461,11 @@ bool ConfigStore::SaveGlobalConfig(const TargetPolicy& targets,
 
     BOOL ok = WritePrivateProfileStringW(L"General", L"target_processes",
         procs.c_str(), fullPath);
-    if (!ok) OutputDebugStringW(L"[ConfigStore] SaveGlobalConfig: target_processes write failed\n");
-
-    for (const auto& hk : hotkeys) {
-        if (!WritePrivateProfileStringW(L"Hotkeys", hk.iniKey,
-            FormatHotkey(hk.vk).c_str(), fullPath))
-        {
-            OutputDebugStringW(L"[ConfigStore] SaveGlobalConfig: hotkey write failed\n");
-        }
-    }
+    if (!ok)
+        OutputDebugStringW(L"[ConfigStore] SaveGlobalConfig: target_processes write failed\n");
     return ok != FALSE;
 }
 
-// ---------- layout ----------
 void ConfigStore::ResetToDefaults(std::vector<OverlayImage>& images) {
     for (int i = 0; i < (int)images.size() && i < MAX_IMAGES; ++i) {
         OverlayImage& img = images[i];
@@ -515,6 +496,7 @@ bool ConfigStore::LoadLayoutForProcess(const std::wstring& procName,
         int x = 0, y = 0, w = 0, h = 0, vis = 1;
         float rot = 0.0f;
         int n = ParseLayoutLine(buf, x, y, w, h, rot, vis);
+
         if (n >= 4) {
             int cap = EffectiveMaxSize();
             bool validWH = (w >= MIN_SIZE && w <= cap &&
@@ -540,6 +522,14 @@ bool ConfigStore::LoadLayoutForProcess(const std::wstring& procName,
                 OutputDebugStringW(line);
             }
         }
+        else if (n > 0 || buf[0] != 0) {
+            wchar_t line[256];
+            swprintf_s(line,
+                L"[ConfigStore] LoadLayoutForProcess: slot '%s' has unparsable "
+                L"line (\"%s\"), keeping defaults\n",
+                kSlots[i].iniKey, buf);
+            OutputDebugStringW(line);
+        }
     }
     return true;
 }
@@ -551,12 +541,11 @@ bool ConfigStore::SaveLayoutForProcess(const std::wstring& procName,
     if (procName.empty()) return false;
 
     wchar_t fullPath[MAX_PATH] = { 0 };
-    if (!GetProcessConfigPath(procName, fullPath, MAX_PATH, /*create*/ true)) {
+    if (!GetProcessConfigPath(procName, fullPath, MAX_PATH, true)) {
         OutputDebugStringW(L"[ConfigStore] SaveLayoutForProcess: GetProcessConfigPath failed\n");
         return false;
     }
 
-    // Если файл уже есть и содержит любой layout — при onlyIfEmpty не перезаписываем.
     if (onlyIfEmpty && GetFileAttributesW(fullPath) != INVALID_FILE_ATTRIBUTES) {
         bool hasAny = false;
         for (int i = 0; i < MAX_IMAGES && !hasAny; ++i) {
@@ -603,17 +592,4 @@ bool ConfigStore::SaveLayoutForProcess(const std::wstring& procName,
         }
     }
     return allOk;
-}
-
-bool ConfigStore::SaveAll(const TargetPolicy& targets,
-    std::span<const HotkeyDef> hotkeys,
-    const std::wstring& layoutOwner,
-    bool layoutDirty,
-    const std::vector<OverlayImage>& images) const
-{
-    bool a = SaveGlobalConfig(targets, hotkeys);
-    bool b = true;
-    if (layoutDirty && !layoutOwner.empty())
-        b = SaveLayoutForProcess(layoutOwner, images, /*onlyIfEmpty*/ false);
-    return a && b;
 }

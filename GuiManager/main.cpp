@@ -2,12 +2,12 @@
 //  main.cpp  — точка входа
 // ============================================================================
 #include "overlay.h"
+#include "ui_kit.h"
 #include "config_store.h"
 #include "image_manager.h"
 #include "target_watcher.h"
 #include "overlay_window.h"
 
-// Глобальные объекты
 ComPtr<IWICImagingFactory> g_wicFactory;
 ComPtr<ID2D1Factory>       g_d2dFactory;
 RECT  g_monRect = { 0, 0, 0, 0 };
@@ -134,15 +134,15 @@ int WINAPI wWinMain(_In_ HINSTANCE hInstance, _In_opt_ HINSTANCE hPrevInstance,
 
     if (!loadDiag.empty()) {
         std::wstring msg = L"Some images failed to load:\n\n" + loadDiag;
-        MessageBoxW(window.Handle(), msg.c_str(), L"Image load warnings",
-            MB_OK | MB_ICONWARNING | MB_TOPMOST);
+        UiKit::ShowWarning(window.Handle(), hInstance,
+            L"Image load warnings", msg.c_str());
     }
     else if (loadedCount == 0) {
-        MessageBoxW(window.Handle(),
+        UiKit::ShowError(window.Handle(), hInstance,
+            L"Resource load error",
             L"No images could be loaded.\n\n"
             L"Check overlay_imgN.png next to the .exe and the embedded "
-            L"resources (RCDATA).",
-            L"Resource load error", MB_ICONERROR | MB_TOPMOST);
+            L"resources (RCDATA).");
     }
 
     window.InitialRender();

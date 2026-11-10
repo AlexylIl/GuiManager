@@ -8,6 +8,7 @@ class TargetWatcher {
 public:
     TargetWatcher() = default;
 
+
     static bool IsIgnoredProcess(const wchar_t* nameLower);
 
     void SetTargets(const TargetPolicy& t);
@@ -16,12 +17,17 @@ public:
 
     static bool GetProcessNameById(DWORD pid, wchar_t* outName, DWORD cch);
 
+    bool BringTargetToForeground();
     bool IsProcessInTargetList(const wchar_t* nameLower) const;
     bool IsTargetForeground();
     bool IsTargetForegroundCached();
     int  CheckAnyTargetRunning();
 
     std::wstring ResolveCurrentTargetProcess();
+
+    std::vector<std::wstring> GetRunningTargets() const;
+    HWND FindMainWindowForProcess(DWORD pid) const;
+
 
     struct ScanResult { bool anyRunning = false; std::wstring firstFound; };
     ScanResult ScanTargets() const;
