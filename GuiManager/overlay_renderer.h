@@ -30,8 +30,10 @@ private:
     bool EnsureRenderTarget(UINT w, UINT h);
     bool EnsureDeviceResources(ID2D1RenderTarget* rt,
         const std::vector<OverlayImage>& images);
+
     bool RenderToHDC(HDC hdc, int w, int h,
-        const std::vector<OverlayImage>& images, bool editMode);
+        const std::vector<OverlayImage>& images, bool editMode,
+        int retry);
 
     struct D2DCache {
         ComPtr<ID2D1DCRenderTarget>      rt;
@@ -48,4 +50,6 @@ private:
         void* pBits = NULL;
         UINT    w = 0, h = 0;
     } m_dib;
+
+    int m_bindDcFails = 0;
 };

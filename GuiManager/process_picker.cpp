@@ -231,8 +231,11 @@ int ProcessPicker::ShowNoProcesses(HWND owner, HINSTANCE hInst)
     sp.title = L"No target processes";
     sp.text =
         L"No target games are running.\n\n"
-        L"Please start the game first, then press '/' again\n"
-        L"to open the hotkey editor.\n\n"
+        L"To add a game, do one of the following:\n"
+        L"  1. Start the game, Alt-Tab into it and press F8 -\n"
+        L"     the overlay will add the active process as a target.\n"
+        L"  2. Start the game, then press '/' again to configure\n"
+        L"     hotkeys for it.\n\n"
         L"Or close the overlay if you don't need it now.";
     sp.buttons = bs;
     sp.buttonCount = 2;

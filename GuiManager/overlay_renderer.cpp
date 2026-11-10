@@ -67,6 +67,7 @@ bool OverlayRenderer::EnsureRenderTarget(UINT w, UINT h) {
     m_cache.brush.Reset();
     m_cache.bmps.clear();
     m_cache.resourcesReady = false;
+    m_bindDcFails = 0; 
 
     D2D1_RENDER_TARGET_PROPERTIES rtProps = D2D1::RenderTargetProperties(
         D2D1_RENDER_TARGET_TYPE_DEFAULT,
@@ -143,13 +144,28 @@ void OverlayRenderer::DrawImageFrameAndHandles(ID2D1RenderTarget* rt,
 }
 
 bool OverlayRenderer::RenderToHDC(HDC hdc, int w, int h,
-    const std::vector<OverlayImage>& images, bool editMode)
+    const std::vector<OverlayImage>& images, bool editMode,
+    int retry)
 {
     if (!EnsureRenderTarget((UINT)w, (UINT)h)) return false;
     if (!m_cache.rt) return false;
 
     RECT rc = { 0, 0, w, h };
-    if (FAILED(m_cache.rt->BindDC(hdc, &rc))) return false;
+    HRESULT hrBind = m_cache.rt->BindDC(hdc, &rc);
+    if (FAILED(hrBind)) {
+        ++m_bindDcFails;
+        wchar_t buf[128];
+        swprintf_s(buf, L"[Renderer] BindDC failed (attempt %d): 0x%08X\n",
+            m_bindDcFails, hrBind);
+        OutputDebugStringW(buf);
+
+        if (m_bindDcFails >= 5) {
+            OutputDebugStringW(L"[Renderer] BindDC failed 5x, recreating RT\n");
+            InvalidateResources();
+        }
+        return false;
+    }
+    m_bindDcFails = 0;
 
     if (!EnsureDeviceResources(m_cache.rt.Get(), images)) return false;
     if (!m_cache.brush) return false;
@@ -187,15 +203,31 @@ bool OverlayRenderer::RenderToHDC(HDC hdc, int w, int h,
     }
 
     HRESULT hr = m_cache.rt->EndDraw();
+
+
+    if (hr == D2DERR_RECREATE_TARGET) {
+        OutputDebugStringW(L"[Renderer] D2DERR_RECREATE_TARGET\n");
+        InvalidateResources();
+        if (retry > 0) {
+            return RenderToHDC(hdc, w, h, images, editMode, retry - 1);
+        }
+        OutputDebugStringW(L"[Renderer] retry exhausted, frame skipped\n");
+        return false;
+    }
+
     if (FAILED(hr)) {
+        wchar_t buf[96];
+        swprintf_s(buf, L"[Renderer] EndDraw failed: 0x%08X\n", hr);
+        OutputDebugStringW(buf);
         InvalidateResources();
         return false;
     }
+
     return true;
 }
 
 bool OverlayRenderer::Render(HDC hdc, int screenW, int screenH,
     const std::vector<OverlayImage>& images, bool editMode)
 {
-    return RenderToHDC(hdc, screenW, screenH, images, editMode);
+    return RenderToHDC(hdc, screenW, screenH, images, editMode, /*retry=*/1);
 }
